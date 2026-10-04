@@ -1,7 +1,23 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../models/github_models.dart';
 import 'github_config.dart';
+
+/// يحوّل استثناءات الشبكة الخام (SocketException وغيرها) إلى رسالة
+/// عربية مفهومة للمستخدم العادي بدل عرض stack trace تقني.
+String friendlyNetworkError(Object e) {
+  if (e is SocketException) {
+    return 'تعذّر الاتصال بالإنترنت — تحقق من اتصال الشبكة وحاول مجددًا';
+  }
+  if (e.toString().contains('Failed host lookup')) {
+    return 'تعذّر الاتصال بالإنترنت — تحقق من اتصال الشبكة وحاول مجددًا';
+  }
+  if (e is HttpException) {
+    return 'تعذّر الوصول إلى GitHub حاليًا، حاول مجددًا بعد قليل';
+  }
+  return 'حدث خطأ أثناء الاتصال، حاول مجددًا';
+}
 
 /// الطبقة المسؤولة عن كل تواصل مع GitHub REST API.
 class GitHubApi {
@@ -31,7 +47,7 @@ class GitHubApi {
       }
       return ApiResult.error('فشل طلب رمز الجهاز', statusCode: response.statusCode);
     } catch (e) {
-      return ApiResult.error('تعذّر الاتصال بـ GitHub: $e');
+      return ApiResult.error(friendlyNetworkError(e));
     }
   }
 
@@ -71,7 +87,7 @@ class GitHubApi {
           );
       }
     } catch (e) {
-      return TokenPollResult.unknownError('تعذّر الاتصال: $e');
+      return TokenPollResult.unknownError(friendlyNetworkError(e));
     }
   }
 
@@ -91,7 +107,7 @@ class GitHubApi {
       }
       return ApiResult.error('فشل جلب معلومات المستخدم', statusCode: response.statusCode);
     } catch (e) {
-      return ApiResult.error('تعذّر الاتصال: $e');
+      return ApiResult.error(friendlyNetworkError(e));
     }
   }
 
@@ -116,7 +132,7 @@ class GitHubApi {
       }
       return ApiResult.error('فشل إنشاء المستودع', statusCode: response.statusCode);
     } catch (e) {
-      return ApiResult.error('تعذّر الاتصال: $e');
+      return ApiResult.error(friendlyNetworkError(e));
     }
   }
 
@@ -153,7 +169,7 @@ class GitHubApi {
       }
       return ApiResult.error('فشل رفع الملف: $path', statusCode: response.statusCode);
     } catch (e) {
-      return ApiResult.error('تعذّر رفع الملف $path: $e');
+      return ApiResult.error('تعذّر رفع الملف $path: ${friendlyNetworkError(e)}');
     }
   }
 
@@ -185,7 +201,7 @@ class GitHubApi {
       }
       return ApiResult.error('فشل تشغيل سير العمل', statusCode: response.statusCode);
     } catch (e) {
-      return ApiResult.error('تعذّر تشغيل سير العمل: $e');
+      return ApiResult.error('تعذّر تشغيل سير العمل: ${friendlyNetworkError(e)}');
     }
   }
 
@@ -211,7 +227,7 @@ class GitHubApi {
       }
       return ApiResult.error('فشل جلب حالة التشغيل', statusCode: response.statusCode);
     } catch (e) {
-      return ApiResult.error('تعذّر الاتصال: $e');
+      return ApiResult.error(friendlyNetworkError(e));
     }
   }
 
@@ -232,7 +248,7 @@ class GitHubApi {
       }
       return ApiResult.error('فشل جلب حالة التشغيل', statusCode: response.statusCode);
     } catch (e) {
-      return ApiResult.error('تعذّر الاتصال: $e');
+      return ApiResult.error(friendlyNetworkError(e));
     }
   }
 
@@ -257,7 +273,7 @@ class GitHubApi {
       }
       return ApiResult.error('فشل جلب قائمة الملفات الناتجة', statusCode: response.statusCode);
     } catch (e) {
-      return ApiResult.error('تعذّر الاتصال: $e');
+      return ApiResult.error(friendlyNetworkError(e));
     }
   }
 
