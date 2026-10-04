@@ -1,12 +1,22 @@
+import 'dart:async';
+import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/auth_manager.dart';
 import 'theme/app_theme.dart';
 
+/// runZonedGuarded كشبكة أمان أخيرة: أي استثناء غير متوقع يهرب من كل
+/// try/catch محلي (مثلاً داخل Timer.periodic) يُسجَّل هنا بدل أن يُبتلع
+/// صامتًا من قبل Dart بلا أثر — هذا بالضبط ما كان يسبب تجمّد شاشة
+/// تسجيل الدخول سابقًا بلا أي رسالة خطأ ظاهرة.
 void main() {
-  WidgetsFlutterBinding.ensureInitialized();
-  runApp(const FlucoBuildApp());
+  runZonedGuarded(() {
+    WidgetsFlutterBinding.ensureInitialized();
+    runApp(const FlucoBuildApp());
+  }, (error, stack) {
+    developer.log('خطأ غير معالج', error: error, stackTrace: stack, name: 'FlucoBuild');
+  });
 }
 
 class FlucoBuildApp extends StatefulWidget {
