@@ -1,18 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import '../services/auth_manager.dart';
 import '../theme/app_theme.dart';
 
 /// يفتح صفحة تفويض GitHub Device Flow داخل متصفح مدمج (WebView) بدل
 /// الانتقال لتطبيق متصفح خارجي — المستخدم يبقى داخل Fluco Build بالكامل.
-/// الرمز (userCode) مكتوب أعلى الشاشة ليبقى ظاهرًا أثناء تعبئته يدويًا.
+///
+/// يستمع مباشرة لـ authManager ويغلق نفسه تلقائيًا (Navigator.pop) بمجرد
+/// نجاح تسجيل الدخول في الخلفية — هذا ضروري لأن MaterialApp.home في main.dart
+/// يستبدل الشجرة بالكامل عند تغيّر الحالة، وبدون هذا الإغلاق التلقائي
+/// تبقى هذه الشاشة عالقة فوق الـ Navigator القديم حتى لو كان المستخدم
+/// قد أكمل التفويض بنجاح فعليًا على صفحة GitHub.
 class GitHubWebViewScreen extends StatefulWidget {
   final String verificationUri;
   final String userCode;
+  final AuthManager authManager;
 
   const GitHubWebViewScreen({
     super.key,
     required this.verificationUri,
     required this.userCode,
+    required this.authManager,
   });
 
   @override
@@ -26,6 +34,8 @@ class _GitHubWebViewScreenState extends State<GitHubWebViewScreen> {
   @override
   void initState() {
     super.initState();
+    widget.authManager.addListener(_onAuthChanged);
+
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(AppTheme.background)
@@ -41,10 +51,24 @@ class _GitHubWebViewScreenState extends State<GitHubWebViewScreen> {
       ..loadRequest(Uri.parse(widget.verificationUri));
   }
 
+  void _onAuthChanged() {
+    // بمجرد نجاح تسجيل الدخول (أو حدوث خطأ) في الخلفية، نغلق هذه الشاشة
+    // تلقائيًا حتى تظهر الشاشة الرئيسية التي استبدلتها MaterialApp فورًا.
+    final status = widget.authManager.status;
+    if (status == AuthStatus.loggedIn || status == AuthStatus.error) {
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.authManager.removeListener(_onAuthChanged);
+    super.dispose();
+  }
+
   /// يحاول تعبئة حقل الرمز تلقائيًا عبر JavaScript بسيط.
-  /// صفحة GitHub تستخدم عادة حقل إدخال واحد ظاهر لرمز التفويض؛
-  /// إن تغيّر هيكل الصفحة مستقبلًا، يبقى بإمكان المستخدم الكتابة يدويًا —
-  /// هذا تحسين لتجربة الاستخدام وليس أساسيًا لعمل تسجيل الدخول.
   Future<void> _tryAutofillCode() async {
     final js = '''
       (function() {
