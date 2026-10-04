@@ -1,19 +1,63 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../services/auth_manager.dart';
 import '../theme/app_theme.dart';
+import 'github_webview_screen.dart';
 
-class LoginScreen extends StatelessWidget {
+class LoginScreen extends StatefulWidget {
   final AuthManager authManager;
 
   const LoginScreen({super.key, required this.authManager});
 
   @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  // يمنع فتح WebView أكثر من مرة لنفس رمز الجهاز
+  String? _openedForDeviceCode;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.authManager.addListener(_onAuthChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.authManager.removeListener(_onAuthChanged);
+    super.dispose();
+  }
+
+  void _onAuthChanged() {
+    final deviceCode = widget.authManager.pendingDeviceCode;
+    if (widget.authManager.status == AuthStatus.awaitingAuthorization &&
+        deviceCode != null &&
+        _openedForDeviceCode != deviceCode.deviceCode) {
+      _openedForDeviceCode = deviceCode.deviceCode;
+      // نفتح WebView المدمج تلقائيًا فور ظهور الرمز — المستخدم يبقى
+      // داخل التطبيق بالكامل بدل الانتقال لمتصفح خارجي.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => GitHubWebViewScreen(
+              verificationUri: deviceCode.verificationUri,
+              userCode: deviceCode.userCode,
+            ),
+          ),
+        );
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: authManager,
+      animation: widget.authManager,
       builder: (context, _) {
+        final authManager = widget.authManager;
         return Scaffold(
           body: SafeArea(
             child: Padding(
@@ -128,12 +172,20 @@ class _DeviceCodeCard extends StatelessWidget {
           ),
           const SizedBox(height: 14),
           GestureDetector(
-            onTap: () => launchUrl(Uri.parse(verificationUri), mode: LaunchMode.externalApplication),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => GitHubWebViewScreen(
+                  verificationUri: verificationUri,
+                  userCode: userCode,
+                ),
+              ),
+            ),
             child: Text.rich(
               TextSpan(
                 children: [
                   const TextSpan(
-                    text: 'افتح ',
+                    text: 'إعادة فتح صفحة ',
                     style: TextStyle(color: AppTheme.textMuted, fontSize: 13),
                   ),
                   TextSpan(
@@ -143,10 +195,6 @@ class _DeviceCodeCard extends StatelessWidget {
                       fontSize: 13,
                       decoration: TextDecoration.underline,
                     ),
-                  ),
-                  const TextSpan(
-                    text: ' وأدخل هذا الرمز',
-                    style: TextStyle(color: AppTheme.textMuted, fontSize: 13),
                   ),
                 ],
               ),
