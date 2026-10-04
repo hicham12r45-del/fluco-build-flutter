@@ -45,6 +45,7 @@ class _LoginScreenState extends State<LoginScreen> {
             builder: (_) => GitHubWebViewScreen(
               verificationUri: deviceCode.verificationUri,
               userCode: deviceCode.userCode,
+              authManager: widget.authManager,
             ),
           ),
         );
@@ -108,6 +109,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     _DeviceCodeCard(
                       userCode: authManager.pendingDeviceCode!.userCode,
                       verificationUri: authManager.pendingDeviceCode!.verificationUri,
+                      authManager: authManager,
                     ),
                   if (authManager.status == AuthStatus.error && authManager.errorMessage != null)
                     _ErrorCard(message: authManager.errorMessage!),
@@ -124,8 +126,13 @@ class _LoginScreenState extends State<LoginScreen> {
 class _DeviceCodeCard extends StatelessWidget {
   final String userCode;
   final String verificationUri;
+  final AuthManager authManager;
 
-  const _DeviceCodeCard({required this.userCode, required this.verificationUri});
+  const _DeviceCodeCard({
+    required this.userCode,
+    required this.verificationUri,
+    required this.authManager,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -178,6 +185,7 @@ class _DeviceCodeCard extends StatelessWidget {
                 builder: (_) => GitHubWebViewScreen(
                   verificationUri: verificationUri,
                   userCode: userCode,
+                  authManager: authManager,
                 ),
               ),
             ),
