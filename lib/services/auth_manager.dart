@@ -6,22 +6,24 @@ import 'secure_store.dart';
 
 enum AuthStatus { loggedOut, awaitingAuthorization, loggedIn, error }
 
-/// ينسّق عملية GitHub Device Flow كاملة ويعرض حالته عبر ChangeNotifier
-/// بحيث تستطيع أي شاشة الاستماع للتغيّرات مباشرة.
+/// ينسّق عملية GitHub Device Flow كاملة ويعرض حالته عبر ChangeNotifier.
 ///
-/// كل مسار قد يرمي استثناءً (خصوصًا SecureStore الذي يعتمد على Keystore
-/// وقد يفشل أحيانًا عند أول كتابة) محاط بـ try/catch صريح. بدون هذا،
-/// استثناء غير متوقع داخل Timer.periodic يُبتلع صامتًا من قبل Dart
-/// (التايمر يستمر لكن هذه الدورة تُفقد بلا أثر) ويترك الحالة عالقة
-/// إلى الأبد على "awaitingAuthorization" حتى لو نجح التفويض فعليًا على GitHub.
+/// بنية الاستطلاع (polling) هنا مبنية على نفس المبدأ المستخدم في تطبيقات
+/// إنتاجية مشابهة تعتمد هذا التدفق بالذات: حلقة واحدة متواصلة (async loop
+/// بدل Timer.periodic المتكرر)، تعمل بأكملها داخل try/catch واحد يغلّف كل
+/// شيء من الاتصال بالشبكة إلى تفسير الرد، وتستدعي نتيجة واحدة فقط (نجاح
+/// أو خطأ) في نهايتها. هذا يتجنب تمامًا مشكلة الطبقات المتعددة من
+/// Timer + إعادة استدعاء ذاتية عند slow_down + حالة متبعثرة عبر عدة
+/// أماكن — وهي الأسباب الجذرية التي جعلت الحالة تتجمّد صامتة سابقًا رغم
+/// نجاح التفويض فعليًا على GitHub.
 class AuthManager extends ChangeNotifier {
   AuthStatus status = AuthStatus.loggedOut;
   DeviceCodeResponse? pendingDeviceCode;
   String? errorMessage;
   String? username;
 
-  Timer? _pollTimer;
-  int _elapsedSeconds = 0;
+  // يُستخدم لإلغاء حلقة الاستطلاع الحالية إن بدأ المستخدم محاولة دخول جديدة
+  int _loginAttemptId = 0;
 
   Future<void> initialize() async {
     try {
@@ -32,9 +34,7 @@ class AuthManager extends ChangeNotifier {
       } else {
         status = AuthStatus.loggedOut;
       }
-    } catch (e) {
-      // فشل قراءة التخزين الآمن عند بدء التشغيل لا يجب أن يجمّد الشاشة
-      // على splash للأبد — نعامله كغير مسجّل دخول ونكمل بشكل طبيعي.
+    } catch (_) {
       status = AuthStatus.loggedOut;
     }
     notifyListeners();
@@ -49,6 +49,8 @@ class AuthManager extends ChangeNotifier {
   }
 
   Future<void> startLogin() async {
+    final attemptId = ++_loginAttemptId;
+
     final result = await GitHubApi.requestDeviceCode();
 
     if (!result.isSuccess || result.data == null) {
@@ -61,87 +63,66 @@ class AuthManager extends ChangeNotifier {
     pendingDeviceCode = result.data;
     status = AuthStatus.awaitingAuthorization;
     errorMessage = null;
-    _elapsedSeconds = 0;
     notifyListeners();
 
-    _startPolling(result.data!);
+    // حلقة استطلاع واحدة متواصلة — نفس بنية الحلقة المرجعية: نوم بين كل
+    // محاولة، ثم تحقق من المهلة الكلية، ثم طلب واحد، كل هذا داخل try/catch
+    // واحد يغلّف الحلقة بأكملها.
+    await _pollLoop(attemptId, result.data!);
   }
 
-  void _startPolling(DeviceCodeResponse deviceCode) {
-    _pollTimer?.cancel();
-    var interval = deviceCode.pollIntervalSeconds;
+  Future<void> _pollLoop(int attemptId, DeviceCodeResponse deviceCode) async {
+    try {
+      final deadline = DateTime.now().add(Duration(seconds: deviceCode.expiresInSeconds));
+      var interval = deviceCode.pollIntervalSeconds < 5 ? 5 : deviceCode.pollIntervalSeconds;
 
-    _pollTimer = Timer.periodic(Duration(seconds: interval), (timer) async {
-      // شبكة أمان شاملة: أي استثناء غير متوقع من أي مصدر هنا (شبكة،
-      // تخزين آمن، تحليل JSON) يُمسك هنا بدل أن يُبتلع صامتًا من قبل
-      // Dart ويُجمّد الحالة للأبد.
-      try {
-        await _pollOnce(timer, deviceCode, interval, (newInterval) => interval = newInterval);
-      } catch (e) {
-        timer.cancel();
-        status = AuthStatus.error;
-        errorMessage = 'حدث خطأ غير متوقع أثناء تسجيل الدخول: $e';
-        notifyListeners();
+      while (true) {
+        if (DateTime.now().isAfter(deadline)) {
+          throw Exception('انتهت مهلة تسجيل الدخول، حاول مجددًا');
+        }
+
+        await Future.delayed(Duration(seconds: interval));
+
+        // إن بدأ المستخدم محاولة دخول جديدة أثناء الانتظار، نوقف هذه
+        // الحلقة القديمة بصمت بدل أن تتعارض مع المحاولة الجديدة.
+        if (attemptId != _loginAttemptId) return;
+
+        final result = await GitHubApi.pollForAccessToken(deviceCode.deviceCode);
+
+        switch (result.status) {
+          case TokenPollStatus.success:
+            await _onLoginSuccess(result.accessToken!);
+            return;
+
+          case TokenPollStatus.pending:
+            continue; // طبيعي — نكمل الحلقة وننتظر المستخدم
+
+          case TokenPollStatus.slowDown:
+            interval += 5;
+            continue;
+
+          case TokenPollStatus.expired:
+            throw Exception('انتهت صلاحية رمز الجهاز، حاول مجددًا');
+
+          case TokenPollStatus.denied:
+            throw Exception('تم رفض التفويض');
+
+          case TokenPollStatus.unknownError:
+            throw Exception(result.errorMessage ?? 'خطأ غير معروف');
+        }
       }
-    });
-  }
-
-  Future<void> _pollOnce(
-    Timer timer,
-    DeviceCodeResponse deviceCode,
-    int currentInterval,
-    void Function(int) onIntervalChanged,
-  ) async {
-    _elapsedSeconds += currentInterval;
-
-    if (_elapsedSeconds >= deviceCode.expiresInSeconds) {
-      timer.cancel();
+    } catch (e) {
+      if (attemptId != _loginAttemptId) return; // محاولة قديمة أُلغيت بالفعل
       status = AuthStatus.error;
-      errorMessage = 'انتهت مهلة تسجيل الدخول، حاول مجددًا';
+      errorMessage = e.toString().replaceFirst('Exception: ', '');
       notifyListeners();
-      return;
-    }
-
-    final result = await GitHubApi.pollForAccessToken(deviceCode.deviceCode);
-
-    switch (result.status) {
-      case TokenPollStatus.success:
-        timer.cancel();
-        await _onLoginSuccess(result.accessToken!);
-        break;
-      case TokenPollStatus.pending:
-        // طبيعي — ننتظر المستخدم
-        break;
-      case TokenPollStatus.slowDown:
-        timer.cancel();
-        onIntervalChanged(currentInterval + 5);
-        _startPolling(deviceCode);
-        break;
-      case TokenPollStatus.expired:
-        timer.cancel();
-        status = AuthStatus.error;
-        errorMessage = 'انتهت صلاحية رمز الجهاز، حاول مجددًا';
-        notifyListeners();
-        break;
-      case TokenPollStatus.denied:
-        timer.cancel();
-        status = AuthStatus.error;
-        errorMessage = 'تم رفض التفويض';
-        notifyListeners();
-        break;
-      case TokenPollStatus.unknownError:
-        timer.cancel();
-        status = AuthStatus.error;
-        errorMessage = result.errorMessage;
-        notifyListeners();
-        break;
     }
   }
 
   Future<void> _onLoginSuccess(String accessToken) async {
-    // نحفظ الحالة الناجحة فورًا — حتى لو فشلت خطوات لاحقة (حفظ التوكن
-    // محليًا، أو جلب اسم المستخدم)، يجب أن يرى المستخدم نتيجة واضحة
-    // (نجاح أو خطأ صريح) بدل البقاء عالقًا على "في انتظار التفويض".
+    // نحفظ النتيجة النهائية بغض النظر عن نجاح الخطوات الفرعية (حفظ محلي،
+    // جلب اسم المستخدم) — فشل خطوة فرعية لا يجب أن يُسقط تسجيل الدخول
+    // بأكمله بصمت.
     try {
       await SecureStore.instance.saveAccessToken(accessToken);
     } catch (e) {
@@ -158,8 +139,7 @@ class AuthManager extends ChangeNotifier {
         await SecureStore.instance.saveUsername(username!);
       }
     } catch (_) {
-      // فشل جلب اسم المستخدم أو حفظه ليس سببًا كافيًا لإفشال تسجيل
-      // الدخول بأكمله — التوكن نفسه محفوظ بنجاح بالفعل في الخطوة السابقة.
+      // غير حرج — التوكن محفوظ بالفعل، يكفي لإكمال تسجيل الدخول
     }
 
     status = AuthStatus.loggedIn;
@@ -169,19 +149,15 @@ class AuthManager extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    _loginAttemptId++; // يلغي أي حلقة استطلاع قديمة ما زالت قيد الانتظار
     try {
       await SecureStore.instance.clear();
     } catch (_) {
-      // حتى لو فشل مسح التخزين، نعيد حالة التطبيق لتسجيل الخروج محليًا
+      // نكمل تسجيل الخروج محليًا حتى لو فشل المسح
     }
     username = null;
+    pendingDeviceCode = null;
     status = AuthStatus.loggedOut;
     notifyListeners();
-  }
-
-  @override
-  void dispose() {
-    _pollTimer?.cancel();
-    super.dispose();
   }
 }
