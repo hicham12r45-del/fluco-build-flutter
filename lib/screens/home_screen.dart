@@ -4,6 +4,7 @@ import '../models/github_models.dart';
 import '../services/auth_manager.dart';
 import '../theme/app_theme.dart';
 import 'build_progress_screen.dart';
+import 'new_project_screen.dart';
 import 'settings_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -39,9 +40,27 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _openNewProjectScreen() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => NewProjectScreen(
+          onProjectCreated: (project) {
+            setState(() => _recentProjects.insert(0, project));
+          },
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _openNewProjectScreen,
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('مشروع جديد'),
+      ),
       body: SafeArea(
         child: CustomScrollView(
           slivers: [
