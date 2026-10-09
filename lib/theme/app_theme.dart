@@ -80,6 +80,15 @@ class AppTheme {
             borderRadius: BorderRadius.circular(14),
             borderSide: const BorderSide(color: accent, width: 1.5),
           ),
+          errorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: danger, width: 1.2),
+          ),
+          focusedErrorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: danger, width: 1.5),
+          ),
+          errorStyle: const TextStyle(color: danger, fontSize: 11),
         ),
         switchTheme: SwitchThemeData(
           thumbColor: WidgetStateProperty.resolveWith(
